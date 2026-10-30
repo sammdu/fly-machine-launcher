@@ -1,0 +1,152 @@
+name: Deploy Machine
+
+on:
+    workflow_dispatch:
+        inputs:
+            mode:
+                description: Deploy mode
+                type: choice
+                options:
+                    - Stay accessible via SSH
+                    - Execute job.sh and shutdown
+                default: Stay accessible via SSH
+                required: true
+            artifact_name:
+                description: Output artifact filename (blank uses fly.json)
+                type: string
+                default: ""
+            wait_minutes:
+                description: Wait for job and collect archive (0 disables)
+                type: number
+                default: 0
+            retention_days:
+                description: Artifact retention in days
+                type: number
+                default: 7
+            timeout_minutes:
+                description: Workflow timeout in minutes
+                type: number
+                default: 180
+
+permissions:
+    contents: read
+
+concurrency:
+    group: fly-machine
+    cancel-in-progress: false
+
+env:
+    FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    FLY_ORG: ${{ vars.FLY_ORG || 'personal' }}
+    MODE: ${{ inputs.mode == 'Execute job.sh and shutdown' && 'job' || 'dev' }}
+    ARTIFACT_NAME: ${{ inputs.artifact_name }}
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        timeout-minutes: ${{ inputs.timeout_minutes }}
+        steps:
+            - uses: actions/checkout@v6
+            - uses: superfly/flyctl-actions/setup-flyctl@master
+            - name: Prepare app and SSH
+              shell: bash
+              env:
+                  SSH_AUTHORIZED_KEYS: ${{ secrets.SSH_AUTHORIZED_KEYS }}
+              run: |
+                  # Validate the key before creating deployment resources.
+                  if [ -z "$SSH_AUTHORIZED_KEYS" ]; then
+                      echo "::error::Set the SSH_AUTHORIZED_KEYS repository secret to your public SSH key."
+                      exit 1
+                  fi
+                  printf '%s\n' "$SSH_AUTHORIZED_KEYS" | ssh-keygen -lf -
+
+                  # Read app, account, and SSH service settings.
+                  app=$(jq -er '.app' fly.json)
+                  devuser=$(jq -er '.env.DEVUSER' fly.json)
+                  workdir=$(jq -er '.env.WORKDIR' fly.json)
+                  ssh_port=$(jq -er '.services[0].ports[0].port' fly.json)
+
+                  # Resolve the archive input against the app's configured default.
+                  if [ -z "$ARTIFACT_NAME" ]; then
+                      ARTIFACT_NAME=$(jq -er '.env.ARTIFACT_NAME' fly.json)
+                  fi
+
+                  # Ensure the target app exists before staging its secrets.
+                  apps=$(flyctl apps list --org "$FLY_ORG" --json)
+                  exists=$(jq --arg app "$app" 'any(.[]; .Name == $app)' <<< "$apps")
+                  if [ "$exists" = false ]; then
+                      flyctl apps create "$app" --org "$FLY_ORG" --yes
+                  fi
+
+                  # Stage keys without restarting the current workload.
+                  flyctl secrets set --app "$app" --stage "SSH_AUTHORIZED_KEYS=$SSH_AUTHORIZED_KEYS"
+
+                  # Use a dedicated IPv4 address for standard SSH access.
+                  ips=$(flyctl ips list --app "$app" --json)
+                  has_ipv4=$(jq 'any(.[]; .Type == "v4")' <<< "$ips")
+                  if [ "$has_ipv4" = false ]; then
+                      flyctl ips allocate-v4 --app "$app" --yes
+                  fi
+
+                  # Pass resolved settings to the remaining steps.
+                  echo "FLY_APP=$app" >> "$GITHUB_ENV"
+                  echo "DEVUSER=$devuser" >> "$GITHUB_ENV"
+                  echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+                  echo "WORKDIR=$workdir" >> "$GITHUB_ENV"
+
+                  # Derive connection details from the app name and service mapping.
+                  echo "SSH_HOST=$app.fly.dev" >> "$GITHUB_ENV"
+                  echo "SSH_PORT=$ssh_port" >> "$GITHUB_ENV"
+            - name: Deploy and start Machine
+              shell: bash
+              run: |
+                  # Record stopped Machines before deploy to avoid rerunning a fast job.
+                  machines=$(flyctl machines list --app "$FLY_APP" --json)
+                  stopped=$(jq -c '[.[] | select(.state == "stopped" or .state == "suspended") | .id]' <<< "$machines")
+
+                  # Apply the new image before starting previously stopped Machines.
+                  flyctl deploy --config fly.json --env MODE="$MODE" --env ARTIFACT_NAME="$ARTIFACT_NAME" --ha=false --strategy immediate --yes
+                  jq -r '.[]' <<< "$stopped" | xargs -r flyctl machine start --app "$FLY_APP"
+            - name: Print access details
+              shell: bash
+              env:
+                  SSH_AUTHORIZED_KEYS: ${{ secrets.SSH_AUTHORIZED_KEYS }}
+              run: |
+                  # Identify the deployed Machine for access details and job waiting.
+                  machines=$(flyctl machines list --app "$FLY_APP" --json)
+                  machine=$(jq -er 'if length == 1 then .[0].id else error("Expected exactly one Machine") end' <<< "$machines")
+                  echo "MACHINE_ID=$machine" >> "$GITHUB_ENV"
+
+                  echo "### Machine access" >> "$GITHUB_STEP_SUMMARY"
+                  echo "Dashboard: https://fly.io/apps/$FLY_APP" >> "$GITHUB_STEP_SUMMARY"
+                  echo "Machine: $machine" >> "$GITHUB_STEP_SUMMARY"
+
+                  # Publish the login details for a standard SSH client.
+                  echo "Host: $SSH_HOST" >> "$GITHUB_STEP_SUMMARY"
+                  echo "Username: $DEVUSER" >> "$GITHUB_STEP_SUMMARY"
+                  echo "Port: $SSH_PORT" >> "$GITHUB_STEP_SUMMARY"
+                  echo "Connect: ssh -p $SSH_PORT $DEVUSER@$SSH_HOST" >> "$GITHUB_STEP_SUMMARY"
+                  echo "Working directory: ~/$WORKDIR" >> "$GITHUB_STEP_SUMMARY"
+
+                  # Show which client keys are trusted by the Machine.
+                  echo "Authorized key fingerprints:" >> "$GITHUB_STEP_SUMMARY"
+                  printf '%s\n' "$SSH_AUTHORIZED_KEYS" | ssh-keygen -lf - >> "$GITHUB_STEP_SUMMARY"
+
+                  [ "$MODE" = job ] && echo "Job mode stops after job.sh and optional archive collection." >> "$GITHUB_STEP_SUMMARY"
+                  cat "$GITHUB_STEP_SUMMARY"
+            - name: Wait for job to stop
+              id: wait
+              if: env.MODE == 'job' && inputs.wait_minutes > 0
+              continue-on-error: true
+              env:
+                  WAIT_MINUTES: ${{ inputs.wait_minutes }}
+              run: flyctl machine wait "$MACHINE_ID" --app "$FLY_APP" --state stopped --wait-timeout "${WAIT_MINUTES}m"
+            - name: Print collection instructions
+              if: env.MODE == 'job' && steps.wait.outcome != 'success'
+              run: echo "Run Collect artifact after the job finishes to download its archive." | tee -a "$GITHUB_STEP_SUMMARY"
+            - name: Collect job archive
+              if: steps.wait.outcome == 'success'
+              uses: ./.github/actions/collect-artifact
+              with:
+                  artifact-name: ${{ env.ARTIFACT_NAME }}
+                  retention-days: ${{ inputs.retention_days }}

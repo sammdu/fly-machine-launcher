@@ -1,0 +1,39 @@
+name: Collect artifact
+
+on:
+    workflow_dispatch:
+        inputs:
+            artifact_name:
+                description: Artifact file name in $WORKDIR (blank uses deployed configuration)
+                type: string
+                default: ""
+            retention_days:
+                description: Artifact retention in days
+                type: number
+                default: 7
+            timeout_minutes:
+                description: Workflow timeout in minutes
+                type: number
+                default: 30
+
+permissions:
+    contents: read
+
+concurrency:
+    group: fly-machine
+    cancel-in-progress: false
+
+env:
+    FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+jobs:
+    collect:
+        runs-on: ubuntu-latest
+        timeout-minutes: ${{ inputs.timeout_minutes }}
+        steps:
+            - uses: actions/checkout@v6
+            - uses: superfly/flyctl-actions/setup-flyctl@master
+            - uses: ./.github/actions/collect-artifact
+              with:
+                  artifact-name: ${{ inputs.artifact_name }}
+                  retention-days: ${{ inputs.retention_days }}

@@ -1,0 +1,45 @@
+{
+    "app": "your-machine-name",
+    "primary_region": "yyz",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "env": {
+        "DEVUSER": "dev",
+        "WORKDIR": "Documents",
+        "ARTIFACT_NAME": "output.tar.gz"
+    },
+    "mounts": [
+        {
+            "source": "workspace",
+            "destination": "/home",
+            "initial_size": "15gb"
+        }
+    ],
+    "services": [
+        {
+            "internal_port": 2222,
+            "protocol": "tcp",
+            "auto_start_machines": false,
+            "auto_stop_machines": "off",
+            "ports": [
+                {
+                    "port": 22
+                }
+            ]
+        }
+    ],
+    "restart": [
+        {
+            "policy": "never"
+        }
+    ],
+    "kill_signal": "SIGTERM",
+    "kill_timeout": 30,
+    "vm": [
+        {
+            "size": "shared-cpu-4x",
+            "memory": "4gb"
+        }
+    ]
+}

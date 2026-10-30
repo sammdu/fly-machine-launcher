@@ -1,0 +1,44 @@
+name: Collect artifact
+description: Download a Machine archive and publish its GitHub download link
+
+inputs:
+    artifact-name:
+        description: Artifact file name in $WORKDIR; blank uses deployed configuration
+        default: ""
+    retention-days:
+        description: Artifact retention in days
+        default: "7"
+
+runs:
+    using: composite
+    steps:
+        - name: Download archive
+          id: collect
+          shell: bash
+          env:
+              ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          run: bash .github/scripts/collect-artifact.sh
+        - name: Upload archive
+          id: upload
+          if: always() && steps.collect.outputs.collected == 'true'
+          uses: actions/upload-artifact@v7
+          with:
+              path: ${{ steps.collect.outputs.archive_path }}
+              archive: false
+              retention-days: ${{ inputs.retention-days }}
+              if-no-files-found: error
+        - name: Print download link
+          if: steps.upload.outputs.artifact-url != ''
+          shell: bash
+          env:
+              ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          run: |
+              echo "Download archive: $ARTIFACT_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+        - name: Check job result
+          if: always() && steps.collect.outputs.job_exit_code != ''
+          shell: bash
+          env:
+              JOB_EXIT_CODE: ${{ steps.collect.outputs.job_exit_code }}
+          run: |
+              echo "Job exit code: $JOB_EXIT_CODE" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit "$JOB_EXIT_CODE"
