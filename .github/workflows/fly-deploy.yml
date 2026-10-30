@@ -20,7 +20,7 @@ on:
                 type: number
                 default: 7
             timeout_minutes:
-                description: Workflow timeout (minutes)
+                description: Workflow timeout (minutes, <= 360)
                 type: number
                 default: 180
 
@@ -40,7 +40,7 @@ env:
 jobs:
     deploy:
         runs-on: ubuntu-latest
-        timeout-minutes: ${{ inputs.timeout_minutes > 0 && inputs.timeout_minutes || 360 }}
+        timeout-minutes: ${{ fromJSON(inputs.timeout_minutes > 0 && inputs.timeout_minutes <= 360 && inputs.timeout_minutes || '360') }}
         steps:
             - uses: actions/checkout@v6
             - uses: superfly/flyctl-actions/setup-flyctl@master
@@ -50,11 +50,13 @@ jobs:
                   SSH_AUTHORIZED_KEYS: ${{ secrets.SSH_AUTHORIZED_KEYS }}
               run: |
                   # Validate the key before creating deployment resources.
-                  if [ -z "$SSH_AUTHORIZED_KEYS" ]; then
+                  if [ "$MODE" = dev ] && [ -z "$SSH_AUTHORIZED_KEYS" ]; then
                       echo "::error::Set the SSH_AUTHORIZED_KEYS repository secret to your public SSH key."
                       exit 1
                   fi
-                  printf '%s\n' "$SSH_AUTHORIZED_KEYS" | ssh-keygen -lf -
+                  if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
+                      printf '%s\n' "$SSH_AUTHORIZED_KEYS" | ssh-keygen -lf -
+                  fi
 
                   # Read app, account, and SSH service settings.
                   app=$(jq -er '.app' fly.json)
@@ -75,7 +77,9 @@ jobs:
                   fi
 
                   # Stage keys without restarting the current workload.
-                  flyctl secrets set --app "$app" --stage "SSH_AUTHORIZED_KEYS=$SSH_AUTHORIZED_KEYS"
+                  if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
+                      flyctl secrets set --app "$app" --stage "SSH_AUTHORIZED_KEYS=$SSH_AUTHORIZED_KEYS"
+                  fi
 
                   # Use a dedicated IPv4 address for standard SSH access.
                   ips=$(flyctl ips list --app "$app" --json)
@@ -125,8 +129,10 @@ jobs:
                   echo "Working directory: ~/$WORKDIR" >> "$GITHUB_STEP_SUMMARY"
 
                   # Show which client keys are trusted by the Machine.
-                  echo "Authorized key fingerprints:" >> "$GITHUB_STEP_SUMMARY"
-                  printf '%s\n' "$SSH_AUTHORIZED_KEYS" | ssh-keygen -lf - >> "$GITHUB_STEP_SUMMARY"
+                  if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
+                      echo "Authorized key fingerprints:" >> "$GITHUB_STEP_SUMMARY"
+                      printf '%s\n' "$SSH_AUTHORIZED_KEYS" | ssh-keygen -lf - >> "$GITHUB_STEP_SUMMARY"
+                  fi
 
                   [ "$MODE" = job ] && echo "Job mode stops after job.sh and optional archive collection." >> "$GITHUB_STEP_SUMMARY"
                   cat "$GITHUB_STEP_SUMMARY"

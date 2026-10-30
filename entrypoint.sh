@@ -9,7 +9,7 @@ case "$MODE" in
         ;;
 esac
 
-if [ -z "$SSH_AUTHORIZED_KEYS" ]; then
+if [ "$MODE" = dev ] && [ -z "$SSH_AUTHORIZED_KEYS" ]; then
     echo "SSH_AUTHORIZED_KEYS must contain your public SSH key." >&2
     exit 1
 fi
@@ -25,27 +25,25 @@ passwd -d "$DEVUSER" || exit 1
 printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$DEVUSER" > "/etc/sudoers.d/$DEVUSER" || exit 1
 chmod 0440 "/etc/sudoers.d/$DEVUSER" || exit 1
 
-# Keep SSH's runtime directory root-owned and the user's SSH files private.
 install -d -o "$DEVUSER" -g "$DEVUSER" "$user_home" || exit 1
-install -d -o root -g root -m 0755 /run/sshd || exit 1
-install -d -o "$DEVUSER" -g "$DEVUSER" -m 0700 "$user_home/.ssh" || exit 1
 
-# Refresh authorized keys from the current deployment secret.
-printf '%s\n' "$SSH_AUTHORIZED_KEYS" > "$user_home/.ssh/authorized_keys" || exit 1
-chown "$DEVUSER:$DEVUSER" "$user_home/.ssh/authorized_keys" || exit 1
-chmod 0600 "$user_home/.ssh/authorized_keys" || exit 1
+if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
+    install -d -o root -g root -m 0755 /run/sshd || exit 1
+    install -d -o "$DEVUSER" -g "$DEVUSER" -m 0700 "$user_home/.ssh" || exit 1
+    printf '%s\n' "$SSH_AUTHORIZED_KEYS" > "$user_home/.ssh/authorized_keys" || exit 1
+    chown "$DEVUSER:$DEVUSER" "$user_home/.ssh/authorized_keys" || exit 1
+    chmod 0600 "$user_home/.ssh/authorized_keys" || exit 1
 
-# Persist the host key to preserve the server's SSH identity across deployments.
-host_key="$user_home/.ssh/ssh_host_ed25519_key"
-if [ ! -f "$host_key" ]; then
-    ssh-keygen -q -t ed25519 -N "" -f "$host_key" || exit 1
+    # Persist the server's SSH identity across deployments.
+    host_key="$user_home/.ssh/ssh_host_ed25519_key"
+    if [ ! -f "$host_key" ]; then
+        ssh-keygen -q -t ed25519 -N "" -f "$host_key" || exit 1
+    fi
+    ssh_options=(-o "HostKey=$host_key" -o "AllowUsers=$DEVUSER")
+    /usr/sbin/sshd -t "${ssh_options[@]}" || exit 1
+    /usr/sbin/sshd -D -e "${ssh_options[@]}" &
+    ssh_pid=$!
 fi
-
-# Make SSH available while job.sh installs tools and runs the workload.
-ssh_options=(-o "HostKey=$host_key" -o "AllowUsers=$DEVUSER")
-/usr/sbin/sshd -t "${ssh_options[@]}" || exit 1
-/usr/sbin/sshd -D -e "${ssh_options[@]}" &
-ssh_pid=$!
 
 cd "$user_home" || exit 1
 

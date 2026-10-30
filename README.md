@@ -62,7 +62,7 @@ In VS Code Remote-SSH, use the **Ports** view.
 | --- | --- |
 | `artifact_name` | Artifact file name in `$WORKDIR`; blank uses the deployed `$ARTIFACT_NAME`. |
 | `retention_days` | GitHub artifact retention; default `7` days, within your repository's limit. |
-| `timeout_minutes` | End-to-end time limit per run, including deployment, waiting, and artifact transfer; default `180` minutes. |
+| `timeout_minutes` | End-to-end time limit per run, including deployment, waiting, and artifact transfer; default `180` minutes (`<= 360`). |
 
 Deployment attempts collection only in **Execute job.sh and shutdown** mode with a positive timeout.
 
