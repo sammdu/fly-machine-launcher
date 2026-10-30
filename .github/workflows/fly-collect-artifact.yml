@@ -4,17 +4,17 @@ on:
     workflow_dispatch:
         inputs:
             artifact_name:
-                description: Artifact file name in $WORKDIR (blank uses deployed configuration)
+                description: Output artifact filename
                 type: string
-                default: ""
+                default: output.tar.gz
             retention_days:
-                description: Artifact retention in days
+                description: Artifact retention (days)
                 type: number
                 default: 7
             timeout_minutes:
-                description: Workflow timeout in minutes
+                description: Workflow timeout (minutes)
                 type: number
-                default: 30
+                default: 180
 
 permissions:
     contents: read

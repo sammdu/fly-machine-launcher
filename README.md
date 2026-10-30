@@ -54,26 +54,23 @@ ssh -i ~/.ssh/fly-machine -N -L 127.0.0.1:8080:127.0.0.1:8080 "$DEVUSER@YOUR_APP
 
 In VS Code Remote-SSH, use the **Ports** view.
 
-## Archives
+## Collecting job artifacts
 
 `job.sh` runs as `$DEVUSER`. The sample works in `$HOME/$WORKDIR` and archives `result.txt` as `$ARTIFACT_NAME`. Return a nonzero exit code on failure.
 
 | Input | Purpose |
 | --- | --- |
 | `artifact_name` | Artifact file name in `$WORKDIR`; blank uses the deployed `$ARTIFACT_NAME`. |
-| `wait_minutes` | Deployment only: wait for job completion and collect the archive. Default `0` returns after deployment. |
 | `retention_days` | GitHub artifact retention; default `7` days, within your repository's limit. |
-| `timeout_minutes` | Workflow time limit; default `180` for deployment and `30` for collection. |
+| `timeout_minutes` | End-to-end time limit per run, including deployment, waiting, and artifact transfer; default `180` minutes. |
 
-A wait timeout leaves the job running; it finishes and shuts down on its own. Run [Collect artifact](../../actions/workflows/fly-collect-artifact.yml) after the job finishes if deployment did not collect its archive.
+Deployment attempts collection only in **Execute job.sh and shutdown** mode with a positive timeout.
+
+A workflow timeout leaves the Machine's job running; it finishes and shuts down on its own. Run [Collect artifact](../../actions/workflows/fly-collect-artifact.yml) after the job finishes if deployment did not collect its artifact.
 
 Collection keeps running development Machines up. For stopped Machines, it retrieves the archive through an idle process, then restores the original command and stopped state. It does not rerun `job.sh`.
 
 The uploaded archive keeps its filename and format. Download it from the run summary or **Artifacts** section. A recorded nonzero job exit code fails the run after upload.
-
-## How Actions accesses files
-
-Actions authenticates to Fly's private SFTP endpoint with `$FLY_API_TOKEN`. [Fly's SSH client](https://github.com/superfly/flyctl/blob/master/internal/command/ssh/connect.go) generates a temporary keypair and obtains a signed certificate. CI keys are not added to `authorized_keys`.
 
 ## Storage
 

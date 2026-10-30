@@ -3,10 +3,10 @@ description: Download a Machine archive and publish its GitHub download link
 
 inputs:
     artifact-name:
-        description: Artifact file name in $WORKDIR; blank uses deployed configuration
+        description: Output artifact filename
         default: ""
     retention-days:
-        description: Artifact retention in days
+        description: Artifact retention (days)
         default: "7"
 
 runs:
