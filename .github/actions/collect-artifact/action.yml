@@ -1,5 +1,5 @@
 name: Collect artifact
-description: Download a Machine archive and publish its GitHub download link
+description: Download Machine artifacts and publish their GitHub download link
 
 inputs:
     artifact-name:
@@ -12,13 +12,13 @@ inputs:
 runs:
     using: composite
     steps:
-        - name: Download archive
+        - name: Download artifacts
           id: collect
           shell: bash
           env:
               ARTIFACT_NAME: ${{ inputs.artifact-name }}
           run: bash .github/scripts/collect-artifact.sh
-        - name: Upload archive
+        - name: Upload artifacts
           id: upload
           if: always() && steps.collect.outputs.collected == 'true'
           uses: actions/upload-artifact@v7
@@ -33,7 +33,7 @@ runs:
           env:
               ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           run: |
-              echo "Download archive: $ARTIFACT_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "Download artifacts: $ARTIFACT_URL" | tee -a "$GITHUB_STEP_SUMMARY"
         - name: Check job result
           if: always() && steps.collect.outputs.job_exit_code != ''
           shell: bash

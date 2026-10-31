@@ -1,11 +1,13 @@
-# Fly Machine Template
+# Fly Machine Github Actions Template
 
-Deploy one Linux machine on Fly.io through GitHub Actions. Both modes start SSH and run [job.sh](job.sh):
+Deploy one Linux machine on Fly.io through GitHub Actions. Both modes run [job.sh](job.sh). SSH is configured when `SSH_AUTHORIZED_KEYS` is set:
 
 | Mode | After `job.sh` exits |
 | --- | --- |
 | Stay accessible via SSH | Keep SSH running, including if provisioning failed. |
-| Execute job.sh and shutdown | Stop the Machine; optionally collect its archive. |
+| Execute job.sh and shutdown | Stop the Machine; optionally collect its artifacts. |
+
+Each deployment replaces the Machine and volume, deleting previous files, and runs `job.sh` once. Ordinary starts retain the files and stay idle.
 
 ## Setup
 
@@ -13,12 +15,12 @@ Deploy one Linux machine on Fly.io through GitHub Actions. Both modes start SSH 
    - Set the app name and review the configured region.
    - Adjust resources: defaults are 4 shared CPUs, 4 GB RAM, and a 15 GB persistent volume.
    - Set `$DEVUSER` to choose the username; default `dev`.
-   - Set `$WORKDIR` for work and archives, relative to the user's home; default `Documents`.
+   - Set `$WORKDIR` for work and artifacts, relative to the user's home; default `Documents`.
    - Set `$ARTIFACT_NAME` for the artifact file name; default `output.tar.gz`.
 2. Review [Dockerfile](Dockerfile), which defaults to `ubuntu:latest`, the latest Ubuntu LTS image.
 3. Put tool installation, provisioning, and workload commands in [job.sh](job.sh).
 4. Add the repository secret `FLY_API_TOKEN`: use an organization token to create the app, or an app deploy token for an existing app. Set the repository variable `FLY_ORG` for organizations other than `personal`.
-5. Use an existing SSH key or generate one locally:
+5. For SSH access (required in dev mode, optional in job mode), use an existing key or generate one locally:
 
    ```sh
    mkdir -p ~/.ssh
@@ -56,7 +58,7 @@ In VS Code Remote-SSH, use the **Ports** view.
 
 ## Collecting job artifacts
 
-`job.sh` runs as `$DEVUSER`. The sample works in `$HOME/$WORKDIR` and archives `result.txt` as `$ARTIFACT_NAME`. Return a nonzero exit code on failure.
+`job.sh` runs as `$DEVUSER`. The sample works in `$HOME/$WORKDIR` and packages `result.txt` as `$ARTIFACT_NAME`. Return a nonzero exit code on failure.
 
 | Input | Purpose |
 | --- | --- |
@@ -68,9 +70,9 @@ Deployment attempts collection only in **Execute job.sh and shutdown** mode with
 
 A workflow timeout leaves the Machine's job running; it finishes and shuts down on its own. Run [Collect artifact](../../actions/workflows/fly-collect-artifact.yml) after the job finishes if deployment did not collect its artifact.
 
-Collection keeps running development Machines up. For stopped Machines, it retrieves the archive through an idle process, then restores the original command and stopped state. It does not rerun `job.sh`.
+Collection starts the Machine if needed, downloads the completed job's artifacts, and restores its previous power state.
 
-The uploaded archive keeps its filename and format. Download it from the run summary or **Artifacts** section. A recorded nonzero job exit code fails the run after upload.
+Uploaded artifacts retain their filenames and formats. Download them from the run summary or **Artifacts** section. A recorded nonzero job exit code fails the run after upload.
 
 ## Storage
 

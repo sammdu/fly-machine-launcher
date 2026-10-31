@@ -34,7 +34,7 @@ if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
     chown "$DEVUSER:$DEVUSER" "$user_home/.ssh/authorized_keys" || exit 1
     chmod 0600 "$user_home/.ssh/authorized_keys" || exit 1
 
-    # Persist the server's SSH identity across deployments.
+    # Preserve the server's SSH identity across restarts.
     host_key="$user_home/.ssh/ssh_host_ed25519_key"
     if [ ! -f "$host_key" ]; then
         ssh-keygen -q -t ed25519 -N "" -f "$host_key" || exit 1
@@ -47,20 +47,24 @@ fi
 
 cd "$user_home" || exit 1
 
-# Persist the job result for later artifact collection.
-status_file="$user_home/.job-exit-code"
-echo running > "$status_file" || exit 1
+# The home volume survives restarts and is replaced on deploy.
+status_file="$user_home/.job_status"
+if [ ! -f "$status_file" ]; then
+    echo running > "$status_file" || exit 1
+    runuser -u "$DEVUSER" -- "$@"
+    status=$?
+    echo "$status" > "$status_file" || exit 1
+    echo "Job exited with status $status."
+    if [ "$MODE" = job ]; then
+        exit "$status"
+    fi
+else
+    echo "Job was already attempted; leaving the Machine idle."
+fi
 
-# Execute the Dockerfile CMD: job.sh by default, as DEVUSER.
-runuser -u "$DEVUSER" -- "$@"
-status=$?
-echo "$status" > "$status_file" || exit 1
-echo "job.sh exited with status $status."
-
-# Keep SSH available for inspection even if job.sh failed.
-if [ "$MODE" = dev ]; then
+if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
     wait "$ssh_pid"
     exit "$?"
 fi
 
-exit "$status"
+exec sleep infinity

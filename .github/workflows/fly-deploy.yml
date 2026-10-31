@@ -64,7 +64,7 @@ jobs:
                   workdir=$(jq -er '.env.WORKDIR' fly.json)
                   ssh_port=$(jq -er '.services[0].ports[0].port' fly.json)
 
-                  # Resolve the archive input against the app's configured default.
+                  # Resolve the artifact input against the app's configured default.
                   if [ -z "$ARTIFACT_NAME" ]; then
                       ARTIFACT_NAME=$(jq -er '.env.ARTIFACT_NAME' fly.json)
                   fi
@@ -97,16 +97,16 @@ jobs:
                   # Derive connection details from the app name and service mapping.
                   echo "SSH_HOST=$app.fly.dev" >> "$GITHUB_ENV"
                   echo "SSH_PORT=$ssh_port" >> "$GITHUB_ENV"
-            - name: Deploy and start Machine
+            - name: Recreate Machine and volume
               shell: bash
               run: |
-                  # Record stopped Machines before deploy to avoid rerunning a fast job.
                   machines=$(flyctl machines list --app "$FLY_APP" --json)
-                  stopped=$(jq -c '[.[] | select(.state == "stopped" or .state == "suspended") | .id]' <<< "$machines")
+                  jq -r '.[].id' <<< "$machines" | xargs -r flyctl machine destroy --app "$FLY_APP" --force
 
-                  # Apply the new image before starting previously stopped Machines.
+                  volumes=$(flyctl volumes list --app "$FLY_APP" --json)
+                  jq -r '.[].id' <<< "$volumes" | xargs -r flyctl volumes destroy --app "$FLY_APP" --yes
+
                   flyctl deploy --config fly.json --env MODE="$MODE" --env ARTIFACT_NAME="$ARTIFACT_NAME" --ha=false --strategy immediate --yes
-                  jq -r '.[]' <<< "$stopped" | xargs -r flyctl machine start --app "$FLY_APP"
             - name: Print access details
               shell: bash
               env:
@@ -121,32 +121,36 @@ jobs:
                   echo "Dashboard: https://fly.io/apps/$FLY_APP" >> "$GITHUB_STEP_SUMMARY"
                   echo "Machine: $machine" >> "$GITHUB_STEP_SUMMARY"
 
-                  # Publish the login details for a standard SSH client.
-                  echo "Host: $SSH_HOST" >> "$GITHUB_STEP_SUMMARY"
-                  echo "Username: $DEVUSER" >> "$GITHUB_STEP_SUMMARY"
-                  echo "Port: $SSH_PORT" >> "$GITHUB_STEP_SUMMARY"
-                  echo "Connect: ssh -p $SSH_PORT $DEVUSER@$SSH_HOST" >> "$GITHUB_STEP_SUMMARY"
                   echo "Working directory: ~/$WORKDIR" >> "$GITHUB_STEP_SUMMARY"
 
                   # Show which client keys are trusted by the Machine.
                   if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
+                      echo "Host: $SSH_HOST" >> "$GITHUB_STEP_SUMMARY"
+                      echo "Username: $DEVUSER" >> "$GITHUB_STEP_SUMMARY"
+                      echo "Port: $SSH_PORT" >> "$GITHUB_STEP_SUMMARY"
+                      echo "Connect: ssh -p $SSH_PORT $DEVUSER@$SSH_HOST" >> "$GITHUB_STEP_SUMMARY"
                       echo "Authorized key fingerprints:" >> "$GITHUB_STEP_SUMMARY"
                       printf '%s\n' "$SSH_AUTHORIZED_KEYS" | ssh-keygen -lf - >> "$GITHUB_STEP_SUMMARY"
                   fi
 
-                  [ "$MODE" = job ] && echo "Job mode stops after job.sh and optional archive collection." >> "$GITHUB_STEP_SUMMARY"
+                  [ "$MODE" = job ] && echo "Job mode stops after job.sh and optional artifact collection." >> "$GITHUB_STEP_SUMMARY"
                   cat "$GITHUB_STEP_SUMMARY"
             - name: Wait for job to stop
               id: wait
               if: env.MODE == 'job' && inputs.timeout_minutes > 0
               continue-on-error: true
-              env:
-                  TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
-              run: flyctl machine wait "$MACHINE_ID" --app "$FLY_APP" --state stopped --wait-timeout "${TIMEOUT_MINUTES}m"
+              run: |
+                  # GitHub Actions limits this wait; flyctl caps wait requests at 60 seconds.
+                  while :; do
+                      machines=$(flyctl machines list --app "$FLY_APP" --json)
+                      state=$(jq -er --arg id "$MACHINE_ID" '.[] | select(.id == $id) | .state' <<< "$machines")
+                      [ "$state" = stopped ] && break
+                      sleep 10
+                  done
             - name: Print collection instructions
               if: env.MODE == 'job' && steps.wait.outcome != 'success'
-              run: echo "Run Collect artifact after the job finishes to download its archive." | tee -a "$GITHUB_STEP_SUMMARY"
-            - name: Collect job archive
+              run: echo "Run Collect artifact after the job finishes to download its artifacts." | tee -a "$GITHUB_STEP_SUMMARY"
+            - name: Collect job artifacts
               if: steps.wait.outcome == 'success'
               uses: ./.github/actions/collect-artifact
               with:
