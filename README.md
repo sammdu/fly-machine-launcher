@@ -19,8 +19,8 @@ Each deployment replaces the Machine and volume, deleting previous files, and ru
    - Set `$ARTIFACT_NAME` for the artifact file name; default `output.tar.gz`.
 2. Review [Dockerfile](Dockerfile), which defaults to `ubuntu:latest`, the latest Ubuntu LTS image.
 3. Put tool installation, provisioning, and workload commands in [job.sh](job.sh).
-4. Add the repository secret `FLY_API_TOKEN`: use an organization token to create the app, or an app deploy token for an existing app. Set the repository variable `FLY_ORG` for organizations other than `personal`.
-5. For SSH access (required in dev mode, optional in job mode), use an existing key or generate one locally:
+4. Add the [repository secret](../../settings/secrets/actions) `FLY_API_TOKEN`: use an organization token to create the app, or an app deploy token for an existing app. Set the repository variable `FLY_ORG` for organizations other than `personal`.
+5. For SSH access (required in dev mode, optional in job mode), set the [repository secret](../../settings/secrets/actions) `SSH_AUTHORIZED_KEYS` with an existing public SSH key or generate one locally:
 
    ```sh
    mkdir -p ~/.ssh
@@ -28,7 +28,7 @@ Each deployment replaces the Machine and volume, deleting previous files, and ru
    cat ~/.ssh/fly-machine.pub
    ```
 
-   Add the public key to the repository secret `SSH_AUTHORIZED_KEYS`. Keep the private key on your computer.
+   Keep the private key on your computer.
 6. Run [Deploy Machine](../../actions/workflows/fly-deploy.yml) and choose a mode.
 
 The workflow creates the app, volume, and dedicated public IPv4 address as needed.
