@@ -35,11 +35,18 @@ runs:
                   echo "source=$id" >> "$GITHUB_OUTPUT"
                   echo "target=$target" >> "$GITHUB_OUTPUT"
               fi
-        - if: steps.resize.outputs.target != ''
+        - id: copy
+          if: steps.resize.outputs.target != ''
           uses: ./.github/actions/fly-copy-volume
           with:
               source-volume: ${{ steps.resize.outputs.source }}
               target-volume: ${{ steps.resize.outputs.target }}
+        - if: always() && steps.resize.outputs.target != '' && steps.copy.outcome != 'success'
+          name: Remove unused target volume
+          shell: bash
+          env:
+              TARGET_VOLUME: ${{ steps.resize.outputs.target }}
+          run: flyctl volumes destroy "$TARGET_VOLUME" --yes
         - if: steps.resize.outputs.target != ''
           uses: ./.github/actions/fly-replace-machine
           with:

@@ -17,8 +17,9 @@ runs:
               TARGET_VOLUME: ${{ inputs.target-volume }}
           run: |
               volumes=$(flyctl volumes list --json)
-              machine=$(jq -r --arg id "$SOURCE_VOLUME" '.[] | select(.id == $id) | .attached_machine_id' <<< "$volumes")
+              machine=$(jq -er --arg id "$SOURCE_VOLUME" '.[] | select(.id == $id) | .attached_machine_id' <<< "$volumes")
               region=$(jq -r --arg id "$SOURCE_VOLUME" '.[] | select(.id == $id) | .region' <<< "$volumes")
+              echo "machine=$machine" >> "$GITHUB_OUTPUT"
 
               # Stop application writes before forking the source volume.
               flyctl machine cordon "$machine"
@@ -37,7 +38,7 @@ runs:
               volumes=$(flyctl volumes list --json)
               source=$(jq -r --arg id "$fork" '.[] | select(.id == $id) | .attached_machine_id' <<< "$volumes")
               destination=$(jq -r --arg id "$TARGET_VOLUME" '.[] | select(.id == $id) | .attached_machine_id' <<< "$volumes")
-              ip=$(flyctl machine status "$source" --json | jq -r .private_ip)
+              ip=$(flyctl machine list --json | jq -er --arg id "$source" '.[] | select(.id == $id) | .private_ip')
 
               flyctl ssh console --machine "$source" --quiet -C 'apk add --no-cache rsync'
               flyctl ssh console --machine "$destination" --quiet -C 'apk add --no-cache rsync'
@@ -67,3 +68,11 @@ runs:
               done
 
               flyctl volumes destroy "$FORK" --yes
+        - if: (failure() || cancelled()) && steps.copy.outputs.machine != ''
+          name: Restore source Machine
+          shell: bash
+          env:
+              MACHINE_ID: ${{ steps.copy.outputs.machine }}
+          run: |
+              flyctl machine start "$MACHINE_ID"
+              flyctl machine uncordon "$MACHINE_ID"
