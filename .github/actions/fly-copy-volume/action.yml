@@ -55,6 +55,16 @@ runs:
               # Preserve metadata and sparse files over private 6PN.
               flyctl ssh console --machine "$source" --quiet -C "rsync --daemon --address=$ip"
               flyctl ssh console --machine "$destination" --quiet -C "rsync -aHAXS --numeric-ids --fsync rsync://[$ip]/data/ /data/"
+        - name: Wait for fork hydration
+          shell: bash
+          env:
+              FORK: ${{ steps.copy.outputs.fork }}
+          run: |
+              while true; do
+                  state=$(flyctl volumes list --json | jq -er --arg id "$FORK" '.[] | select(.id == $id) | .state')
+                  [ "$state" != created ] || break
+                  sleep 5
+              done
         - if: always() && steps.copy.outputs.fork != ''
           shell: bash
           env:
