@@ -1,0 +1,70 @@
+name: Fly Private Networking
+
+on:
+    workflow_call:
+        inputs:
+            operation:
+                description: Networking Operation
+                type: string
+                default: View app networks and IPs
+            peer_name:
+                description: WireGuard peer (required to revoke)
+                type: string
+                default: ""
+            access_mode:
+                description: internal, flycast, or public; blank preserves access
+                type: string
+                default: ""
+    workflow_dispatch:
+        inputs:
+            operation:
+                description: Networking Operation
+                type: choice
+                options:
+                    - View app networks and IPs
+                    - Configure app network
+                    - List WireGuard peers
+                    - Vend WireGuard config
+                    - Revoke WireGuard peer
+                required: true
+                default: View app networks and IPs
+            peer_name:
+                description: WireGuard peer (required to revoke)
+                required: false
+                default: ""
+            access_mode:
+                description: App access (Configure app network only)
+                type: choice
+                options:
+                    - ""
+                    - internal
+                    - flycast
+                    - public
+                default: ""
+
+permissions:
+    contents: read
+
+concurrency:
+    group: fly-${{ github.repository }}
+    cancel-in-progress: false
+
+jobs:
+    networking:
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v6
+            - uses: ./.github/actions/fly-setup
+              with:
+                  fly-api-token: ${{ secrets.FLY_API_TOKEN }}
+            - if: inputs.operation == 'Configure app network' || inputs.operation == 'View app networks and IPs'
+              uses: ./.github/actions/fly-networking
+              with:
+                  operation: ${{ inputs.operation == 'Configure app network' && 'configure' || 'view' }}
+                  access-mode: ${{ inputs.access_mode }}
+            - if: inputs.operation != 'Configure app network' && inputs.operation != 'View app networks and IPs'
+              uses: ./.github/actions/fly-wireguard-config
+              with:
+                  operation: ${{ inputs.operation }}
+                  peer-name: ${{ inputs.peer_name }}

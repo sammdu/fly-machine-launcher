@@ -20,7 +20,7 @@ permissions:
     contents: read
 
 concurrency:
-    group: fly-machine
+    group: fly-${{ github.repository }}
     cancel-in-progress: false
 
 env:

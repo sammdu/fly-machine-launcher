@@ -1,0 +1,42 @@
+name: Fly Restore Volume Snapshot
+
+on:
+    workflow_dispatch:
+        inputs:
+            snapshot_id:
+                description: Snapshot ID
+                required: true
+            replace:
+                description: Replace Machine to Attached Restored Volume
+                type: boolean
+                default: false
+            volume_name:
+                description: Volume name (unset = keep original)
+                default: ""
+            region:
+                description: Region (unset = keep original)
+                default: ""
+            size_gb:
+                description: Size in GB (unset = keep original)
+                default: ""
+
+concurrency:
+    group: fly-${{ github.repository }}
+    cancel-in-progress: false
+
+jobs:
+    restore:
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v6
+            - uses: ./.github/actions/fly-setup
+              with:
+                  fly-api-token: ${{ secrets.FLY_API_TOKEN }}
+            - uses: ./.github/actions/fly-restore-volume-snapshot
+              with:
+                  snapshot-id: ${{ inputs.snapshot_id }}
+                  replace: ${{ inputs.replace }}
+                  volume-name: ${{ inputs.volume_name }}
+                  region: ${{ inputs.region }}
+                  size-gb: ${{ inputs.size_gb }}

@@ -1,0 +1,27 @@
+name: Fly Migrate Region to Match fly.json
+
+on:
+    workflow_dispatch:
+        inputs:
+            confirm:
+                description: Apply migration (leave unchecked to preview)
+                type: boolean
+                default: false
+
+concurrency:
+    group: fly-${{ github.repository }}
+    cancel-in-progress: false
+
+jobs:
+    migrate:
+        runs-on: ubuntu-latest
+        timeout-minutes: 360
+
+        steps:
+            - uses: actions/checkout@v6
+            - uses: ./.github/actions/fly-setup
+              with:
+                  fly-api-token: ${{ secrets.FLY_API_TOKEN }}
+            - uses: ./.github/actions/fly-migrate-region
+              with:
+                  confirm: ${{ inputs.confirm }}

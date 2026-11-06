@@ -1,0 +1,30 @@
+name: Fly Resize Volume
+
+on:
+    workflow_dispatch:
+        inputs:
+            machine_id:
+                description: Machine ID
+                required: true
+            size_gb:
+                description: Volume size in GB (1-500)
+                type: number
+                required: true
+
+concurrency:
+    group: fly-${{ github.repository }}
+    cancel-in-progress: false
+
+jobs:
+    resize:
+        runs-on: ubuntu-latest
+        timeout-minutes: 360
+        steps:
+            - uses: actions/checkout@v6
+            - uses: ./.github/actions/fly-setup
+              with:
+                  fly-api-token: ${{ secrets.FLY_API_TOKEN }}
+            - uses: ./.github/actions/fly-resize-volume
+              with:
+                  machine-id: ${{ inputs.machine_id }}
+                  size-gb: ${{ inputs.size_gb }}

@@ -1,0 +1,58 @@
+name: Fly.io Migrate Region
+description: Relocate Machines and their attached volumes into fly.json primary_region (fork volume, clone Machine, destroy originals)
+
+inputs:
+    confirm:
+        description: Set to "true" to perform the migration; otherwise only list out-of-region Machines
+        required: false
+        default: "false"
+
+runs:
+    using: composite
+    steps:
+        - name: Migrate machines into primary region
+          shell: bash
+          env:
+              CONFIRM: ${{ inputs.confirm }}
+          run: |
+              region="$FLY_PRIMARY_REGION"
+
+              machines=$(flyctl machine list --json | jq -r --arg region "$region" '.[] | select(.region != $region) | .id')
+              if [ -z "$machines" ]; then
+                  echo "All machines already in $region."
+                  exit 0
+              fi
+
+              echo "Machines outside $region:"
+              echo "$machines"
+              if [ "$CONFIRM" != "true" ]; then
+                  echo "Set confirm: \"true\" to fork volumes, clone into $region, and destroy the originals."
+                  exit 0
+              fi
+
+              for machine in $machines; do
+                  echo "Migrating $machine -> $region"
+
+                  # Stop writes before copying data into the destination region.
+                  flyctl machine cordon "$machine"
+                  flyctl machine stop "$machine" --signal SIGTERM --wait-timeout 1m
+
+                  # Fork any attached volume and wait for the regional copy to be available.
+                  vol_id=$(flyctl volumes list --json | jq -r --arg machine "$machine" '.[] | select(.attached_machine_id == $machine) | .id')
+                  new_vol_id=""
+                  if [ -n "$vol_id" ]; then
+                      new_vol_id=$(flyctl volumes fork "$vol_id" --region "$region" --json | jq -er .id)
+
+                      until [ "$(flyctl volumes list --json | jq -r --arg id "$new_vol_id" '.[] | select(.id == $id).state')" = created ]; do
+                          sleep 10
+                      done
+                  fi
+
+                  # Attach the regional copy to a replacement before deleting the originals.
+                  args=("$machine" --region "$region")
+                  [ -z "$new_vol_id" ] || args+=(--attach-volume "$new_vol_id")
+                  flyctl machine clone "${args[@]}"
+
+                  flyctl machine destroy "$machine" --force
+                  [ -z "$vol_id" ] || flyctl volumes destroy "$vol_id" --yes --verbose
+              done

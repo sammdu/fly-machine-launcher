@@ -1,0 +1,52 @@
+name: Fly.io Resize Volume
+description: Resize a volume
+
+inputs:
+    machine-id:
+        required: true
+    size-gb:
+        required: true
+
+runs:
+    using: composite
+    steps:
+        - id: resize
+          shell: bash
+          env:
+              MACHINE_ID: ${{ inputs.machine-id }}
+              SIZE_GB: ${{ inputs.size-gb }}
+          run: |
+              SIZE_GB=$(jq -enr --argjson size "$SIZE_GB" '$size | select(. >= 1 and . <= 500 and . == floor) | floor')
+              volume=$(flyctl volumes list --json | jq -ec --arg machine "$MACHINE_ID" '.[] | select(.attached_machine_id == $machine)')
+              id=$(jq -r .id <<< "$volume")
+              current=$(jq -r .size_gb <<< "$volume")
+              [ "$SIZE_GB" -ne "$current" ] || exit 0
+
+              # Extend in place for growth; shrinking needs a replacement volume.
+              if [ "$SIZE_GB" -gt "$current" ]; then
+                  flyctl volumes extend "$id" --size "$SIZE_GB" --yes
+              else
+                  # Preserve the source region, snapshot policy, and encryption settings.
+                  args=("$(jq -r .name <<< "$volume")" --region "$(jq -r .region <<< "$volume")" --size "$SIZE_GB" --yes --json)
+                  args+=(--snapshot-retention "$(jq -r .snapshot_retention <<< "$volume")" --scheduled-snapshots="$(jq -r .auto_backup_enabled <<< "$volume")")
+                  [ "$(jq -r .encrypted <<< "$volume")" = true ] || args+=(--no-encryption)
+                  target=$(flyctl volumes create "${args[@]}" | jq -r .id)
+
+                  echo "source=$id" >> "$GITHUB_OUTPUT"
+                  echo "target=$target" >> "$GITHUB_OUTPUT"
+              fi
+        - if: steps.resize.outputs.target != ''
+          uses: ./.github/actions/fly-copy-volume
+          with:
+              source-volume: ${{ steps.resize.outputs.source }}
+              target-volume: ${{ steps.resize.outputs.target }}
+        - if: steps.resize.outputs.target != ''
+          uses: ./.github/actions/fly-replace-machine
+          with:
+              machine-id: ${{ inputs.machine-id }}
+              volume-id: ${{ steps.resize.outputs.target }}
+        - if: steps.resize.outputs.target != ''
+          shell: bash
+          env:
+              SOURCE_VOLUME: ${{ steps.resize.outputs.source }}
+          run: flyctl volumes destroy "$SOURCE_VOLUME" --yes

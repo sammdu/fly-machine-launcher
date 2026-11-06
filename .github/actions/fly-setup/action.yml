@@ -1,0 +1,36 @@
+name: Fly.io Setup
+description: Install flyctl and export shared Fly.io environment for all later steps
+
+inputs:
+    fly-api-token:
+        description: Fly.io API token
+        required: true
+    fly-org:
+        description: Organization for app creation; blank reads the app's organization
+        default: ""
+
+runs:
+    using: composite
+    steps:
+        - uses: superfly/flyctl-actions/setup-flyctl@master
+        - name: Load environment
+          shell: bash
+          env:
+              FLY_API_TOKEN: ${{ inputs.fly-api-token }}
+              FLY_ORG: ${{ inputs.fly-org }}
+          run: |
+              app_name=$(jq -r '.app // ""' fly.json)
+              primary_region=$(jq -r '.primary_region // ""' fly.json)
+              [ -z "$FLY_API_TOKEN" ] && echo "Missing fly-api-token" && exit 1
+              [ -z "$app_name" ] && echo "Missing .app in fly.json" && exit 1
+              [ -z "$primary_region" ] && echo "Missing .primary_region in fly.json" && exit 1
+              [ -n "$FLY_ORG" ] || FLY_ORG=$(flyctl status --app "$app_name" --json | jq -er .Organization.Slug)
+
+              # Native flyctl variables select the app and authenticate later steps.
+              cat >> "$GITHUB_ENV" <<EOF
+              FLY_API_TOKEN=$FLY_API_TOKEN
+              FLY_APP=$app_name
+              FLY_PRIMARY_REGION=$primary_region
+              FLY_ORG=$FLY_ORG
+              FLY_NETWORK=app-$app_name
+              EOF

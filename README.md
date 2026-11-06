@@ -1,4 +1,4 @@
-# Fly Machine Github Actions Template
+# Fly Odd Machines
 
 Deploy one Linux machine on Fly.io through GitHub Actions. Both modes run [job.sh](job.sh). SSH is configured when `SSH_AUTHORIZED_KEYS` is set:
 
@@ -77,4 +77,20 @@ Uploaded artifacts retain their filenames and formats. Download them from the ru
 ## Storage
 
 The volume persists `/home`, including `~/Documents`, `~/.ssh`, and job status. Files outside `/home` are ephemeral.
+
+Run [Fly Resize Volume](../../actions/workflows/fly-resize-volume.yml) with the Machine ID and desired size. Growth extends the volume; shrinking stops the Machine, copies its data, and replaces the Machine and volume. The data must fit the requested size. Update `mounts[].initial_size` in `fly.json` for future deployments, which recreate storage.
+
+Run [Fly Restore Volume Snapshot](../../actions/workflows/fly-restore-volume-snapshot.yml) with a snapshot ID to create a restored volume. Enable `replace` to replace the source volume's Machine with a clone using the restored volume. The original volume is retained.
+
+## Region migration
+
+Set `primary_region` in `fly.json`, then run [Fly Migrate Region](../../actions/workflows/fly-migrate-region.yml) to preview Machines outside that region. Enable `confirm` to stop them, fork their volumes into the target region, clone the Machines, and delete the originals.
+
+## Networking
+
+Run [Fly Private Networking](../../actions/workflows/fly-private-networking.yml) to inspect addresses, configure access, or list, create, and revoke WireGuard peers. For **Configure app network**, choose `internal`, `flycast`, or `public`; blank preserves access. Private modes remove public IPs. Direct internal access requires the app to already use its dedicated `app-<app-name>` network; use Flycast for an existing app on the default network.
+
+WireGuard configs are downloadable artifacts retained for one day. Import the config into your WireGuard client. Peers persist until revoked. These workflows use `FLY_API_TOKEN`; WireGuard operations require organization access.
+
+The `fly-*` composite actions and resize, restore, and migration workflows are copied verbatim from `fly-from-image-gitops`. The networking workflow adds access selection and concurrency. Operations share deployment's concurrency group.
 

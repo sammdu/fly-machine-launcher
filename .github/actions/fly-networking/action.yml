@@ -1,0 +1,104 @@
+name: Fly.io Networking
+description: View app networks, IPs, and URLs, or configure public, internal, or Flycast access
+
+inputs:
+    operation:
+        description: view or configure
+        default: view
+    access-mode:
+        description: internal, flycast, or public; unset preserves existing access
+        required: false
+        default: ""
+
+runs:
+    using: composite
+    steps:
+        - if: inputs.operation == 'configure'
+          name: Configure app network
+          shell: bash
+          env:
+              ACCESS_MODE: ${{ inputs.access-mode }}
+          run: |
+              mode="$ACCESS_MODE"
+              case "$mode" in
+                  ""|internal|flycast|public) ;;
+                  *) echo "access-mode must be internal, flycast, or public; unset preserves existing access."; exit 1 ;;
+              esac
+
+              app_network=$(flyctl apps list --org "$FLY_ORG" --json | jq -r --arg app "$FLY_APP" '.[] | select(.Name == $app) | if .Network == "" then "default" else .Network end')
+              ips=$(flyctl ips list --json)
+
+              # Existing access uses Flycast when available, otherwise the Machine's network.
+              if [ -z "$mode" ]; then
+                  if ! jq -e 'any(.[]; .Type == "private_v6")' <<< "$ips"; then
+                      [ "$app_network" != "default" ] || app_network=""
+                      echo "FLY_NETWORK=$app_network" >> "$GITHUB_ENV"
+                      exit 0
+                  fi
+                  mode=flycast
+              fi
+
+              if [ "$mode" = "internal" ] && [ "$app_network" != "$FLY_NETWORK" ]; then
+                  echo "Direct internal access requires app '$FLY_APP' on '$FLY_NETWORK'. Fly.io cannot change an existing app's Machine network; use flycast or recreate the app."
+                  exit 1
+              fi
+
+              # Create a persistent client network before assigning cross-network Flycast access.
+              private_v6=$(jq -r --arg network "$FLY_NETWORK" '.[] | select(.Type == "private_v6" and .Network.Name == $network) | .Address' <<< "$ips")
+              if [ "$mode" = "flycast" ] && [ -z "$private_v6" ] && [ "$app_network" != "$FLY_NETWORK" ]; then
+                  seed_app="net-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+                  flyctl apps create "$seed_app" --org "$FLY_ORG" --network "$FLY_NETWORK"
+                  flyctl apps destroy "$seed_app" --yes
+                  echo "Created network '$FLY_NETWORK' in '$FLY_ORG'." | tee -a "$GITHUB_STEP_SUMMARY"
+              fi
+
+              # Explicit private modes remove public IPs; observed access preserves them.
+              if [ "$mode" != "public" ] && [ -n "$ACCESS_MODE" ]; then
+                  jq -r '.[] | select(.Type == "v4" or .Type == "v6" or .Type == "shared_v4") | .Address' <<< "$ips" | xargs -r flyctl ips release
+              fi
+
+              if [ "$mode" = "flycast" ]; then
+                  [ -n "$private_v6" ] || flyctl ips allocate-v6 --private --network "$FLY_NETWORK" --verbose
+              else
+                  xargs -r flyctl ips release <<< "$private_v6"
+                  if [ "$mode" = "public" ]; then
+                      if ! jq -e 'any(.[]; .Type == "v4" or .Type == "shared_v4")' <<< "$ips"; then
+                          flyctl ips allocate-v4 --shared
+                      fi
+                      if ! jq -e 'any(.[]; .Type == "v6")' <<< "$ips"; then
+                          flyctl ips allocate-v6
+                      fi
+                  fi
+              fi
+
+              echo "Manage or delete IPs: https://fly.io/apps/$FLY_APP" | tee -a "$GITHUB_STEP_SUMMARY"
+        - if: inputs.operation != 'configure'
+          name: View app networks and IPs
+          shell: bash
+          env:
+              NETWORK_OPERATION: ${{ inputs.operation }}
+          run: |
+              case "$NETWORK_OPERATION" in
+                  view) ;;
+                  *) echo "operation must be view or configure."; exit 1 ;;
+              esac
+
+              app_network=$(flyctl apps list --org "$FLY_ORG" --json | jq -r --arg app "$FLY_APP" '.[] | select(.Name == $app) | if .Network == "" then "default" else .Network end')
+              ips=$(flyctl ips list --json)
+
+              # Report access URLs from the app's allocated public and Flycast addresses.
+              summary=("### Fly.io networking" "")
+              if jq -e 'any(.[]; .Type == "v4" or .Type == "v6" or .Type == "shared_v4")' <<< "$ips" > /dev/null; then
+                  summary+=("- https://${FLY_APP}.fly.dev")
+              fi
+              if jq -e 'any(.[]; .Type == "private_v6")' <<< "$ips" > /dev/null; then
+                  summary+=("- http://${FLY_APP}.flycast")
+              fi
+              summary+=("- http://${FLY_APP}.internal" "" '```text' "Machine network: $app_network" "Client network target: $FLY_NETWORK" "" $'TYPE\tIP\tNETWORK\tREGION')
+              printf '%s\n' "${summary[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+              jq -r '.[] | [.Type, .Address, (.Network.Name // "-"), (.Region // "-")] | @tsv' <<< "$ips" | tee -a "$GITHUB_STEP_SUMMARY"
+              printf '\nMachine private IPs\n' | tee -a "$GITHUB_STEP_SUMMARY"
+              flyctl ips private | tee -a "$GITHUB_STEP_SUMMARY"
+              echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "Manage or delete IPs: https://fly.io/apps/$FLY_APP" | tee -a "$GITHUB_STEP_SUMMARY"

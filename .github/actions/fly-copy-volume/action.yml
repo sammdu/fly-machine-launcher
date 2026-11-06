@@ -1,0 +1,69 @@
+name: Fly.io Copy Volume
+description: Copy volume data over private 6PN
+
+inputs:
+    source-volume:
+        required: true
+    target-volume:
+        required: true
+
+runs:
+    using: composite
+    steps:
+        - id: copy
+          shell: bash
+          env:
+              SOURCE_VOLUME: ${{ inputs.source-volume }}
+              TARGET_VOLUME: ${{ inputs.target-volume }}
+          run: |
+              volumes=$(flyctl volumes list --json)
+              machine=$(jq -r --arg id "$SOURCE_VOLUME" '.[] | select(.id == $id) | .attached_machine_id' <<< "$volumes")
+              region=$(jq -r --arg id "$SOURCE_VOLUME" '.[] | select(.id == $id) | .region' <<< "$volumes")
+
+              # Stop application writes before forking the source volume.
+              flyctl machine cordon "$machine"
+              flyctl machine stop "$machine" --signal SIGTERM --wait-timeout 1m
+              fork=$(flyctl volumes fork "$SOURCE_VOLUME" --json | jq -r .id)
+              echo "fork=$fork" >> "$GITHUB_OUTPUT"
+
+              # Keep rsync tooling on temporary workers.
+              prefix="volume-copy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-"
+              for role in source destination; do
+                  volume="$fork"
+                  [ "$role" = source ] || volume="$TARGET_VOLUME"
+                  flyctl machine run alpine:3.23 sleep infinity --name "$prefix$role" --region "$region" --volume "$volume:/data" --vm-size shared-cpu-1x --vm-memory 256 --restart no
+              done
+
+              volumes=$(flyctl volumes list --json)
+              source=$(jq -r --arg id "$fork" '.[] | select(.id == $id) | .attached_machine_id' <<< "$volumes")
+              destination=$(jq -r --arg id "$TARGET_VOLUME" '.[] | select(.id == $id) | .attached_machine_id' <<< "$volumes")
+              ip=$(flyctl machine status "$source" --json | jq -r .private_ip)
+
+              flyctl ssh console --machine "$source" --quiet -C 'apk add --no-cache rsync'
+              flyctl ssh console --machine "$destination" --quiet -C 'apk add --no-cache rsync'
+
+              # Serve the source fork read-only.
+              flyctl ssh console --machine "$source" --quiet -C 'tee /etc/rsyncd.conf' <<'EOF'
+              uid = 0
+              gid = 0
+              read only = yes
+              [data]
+              path = /data
+              EOF
+
+              # Preserve metadata and sparse files over private 6PN.
+              flyctl ssh console --machine "$source" --quiet -C "rsync --daemon --address=$ip"
+              flyctl ssh console --machine "$destination" --quiet -C "rsync -aHAXS --numeric-ids --fsync rsync://[$ip]/data/ /data/"
+        - if: always() && steps.copy.outputs.fork != ''
+          shell: bash
+          env:
+              FORK: ${{ steps.copy.outputs.fork }}
+          run: |
+              # Release worker attachments before deleting the temporary fork.
+              prefix="volume-copy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-"
+              workers=$(flyctl machine list --json | jq -r --arg prefix "$prefix" '.[] | select(.name | startswith($prefix)) | .id')
+              for worker in $workers; do
+                  flyctl machine destroy "$worker" --force
+              done
+
+              flyctl volumes destroy "$FORK" --yes

@@ -1,0 +1,52 @@
+name: Fly.io Restore Volume Snapshot
+description: Restore a snapshot to a new volume and optionally replace its original Machine
+
+inputs:
+    snapshot-id:
+        required: true
+    replace:
+        default: "false"
+    volume-name:
+        default: ""
+    region:
+        default: ""
+    size-gb:
+        default: ""
+
+runs:
+    using: composite
+    steps:
+        - id: restore
+          name: Restore volume from snapshot
+          shell: bash
+          env:
+              SNAPSHOT_ID: ${{ inputs.snapshot-id }}
+              VOLUME_NAME: ${{ inputs.volume-name }}
+              REGION: ${{ inputs.region }}
+              SIZE_GB: ${{ inputs.size-gb }}
+          run: |
+              vols=$(flyctl volumes list --json)
+              src=$(for v in $(jq -r '.[].id' <<< "$vols"); do
+                  flyctl volumes snapshots list "$v" --json | jq -r --arg v "$v" --arg s "$SNAPSHOT_ID" 'if any(.id == $s) then $v else empty end'
+              done)
+              vol=$(jq -c --arg v "$src" 'map(select(.id == $v))[0]' <<< "$vols")
+
+              machine=$(jq -r '.attached_machine_id // empty' <<< "$vol")
+
+              # Use source-volume defaults for omitted restore options.
+              name="$VOLUME_NAME"
+              [ -n "$name" ] || name=$(jq -r .name <<< "$vol")
+              region="$REGION"
+              [ -n "$region" ] || region=$(jq -r .region <<< "$vol")
+              size="$SIZE_GB"
+              [ -n "$size" ] || size=$(jq -r .size_gb <<< "$vol")
+
+              id=$(flyctl volumes create "$name" --snapshot-id "$SNAPSHOT_ID" --region "$region" --size "$size" --yes --json | jq -er .id)
+              echo "volume-id=$id" >> "$GITHUB_OUTPUT"
+              echo "machine-id=$machine" >> "$GITHUB_OUTPUT"
+              echo "Restored volume: $id" | tee -a "$GITHUB_STEP_SUMMARY"
+        - if: inputs.replace == 'true'
+          uses: ./.github/actions/fly-replace-machine
+          with:
+              machine-id: ${{ steps.restore.outputs.machine-id }}
+              volume-id: ${{ steps.restore.outputs.volume-id }}

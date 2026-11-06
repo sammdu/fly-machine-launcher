@@ -1,0 +1,25 @@
+name: Fly.io Replace Machine
+description: Clone a Machine and destroy the original
+
+inputs:
+    machine-id:
+        required: true
+    volume-id:
+        default: ""
+    region:
+        default: ""
+
+runs:
+    using: composite
+    steps:
+        - shell: bash
+          env:
+              MACHINE_ID: ${{ inputs.machine-id }}
+              VOLUME_ID: ${{ inputs.volume-id }}
+              REGION: ${{ inputs.region }}
+          run: |
+              args=("$MACHINE_ID")
+              [ -z "$VOLUME_ID" ] || args+=(--attach-volume "$VOLUME_ID")
+              [ -z "$REGION" ] || args+=(--region "$REGION")
+              flyctl machine clone "${args[@]}"
+              flyctl machine destroy "$MACHINE_ID" --force

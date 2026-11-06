@@ -1,0 +1,76 @@
+name: Fly.io WireGuard Config
+description: List or revoke peers, or vend a WireGuard config
+
+inputs:
+    operation:
+        description: Networking Operation
+        required: false
+        default: Vend WireGuard config
+    peer-name:
+        description: WireGuard peer name; blank generates a name when vending
+        required: false
+        default: ""
+
+runs:
+    using: composite
+    steps:
+        - name: ${{ inputs.operation }}
+          id: peer
+          shell: bash
+          env:
+              WIREGUARD_OPERATION: ${{ inputs.operation }}
+              WIREGUARD_PEER_NAME: ${{ inputs.peer-name }}
+          run: |
+              peer="$WIREGUARD_PEER_NAME"
+
+              case "$WIREGUARD_OPERATION" in
+                  "List WireGuard peers") flyctl wireguard list "$FLY_ORG"; exit ;;
+                  "Revoke WireGuard peer") flyctl wireguard remove "$FLY_ORG" "$peer"; exit ;;
+                  "Vend WireGuard config") ;;
+                  *) echo "Unknown WireGuard operation: $WIREGUARD_OPERATION"; exit 1 ;;
+              esac
+
+              # Keep the random suffix within Linux's 15-character interface-name limit.
+              [ -n "$peer" ] || peer="${FLY_APP:0:10}-$(openssl rand -hex 2)"
+
+              if [[ ! "$peer" =~ ^[a-zA-Z0-9-]+$ ]]; then
+                  echo "Peer names must contain only letters, numbers, and dashes."
+                  exit 1
+              fi
+
+              existing_peer=$(flyctl wireguard list "$FLY_ORG" --json | jq -r --arg peer "$peer" '.[] | select(.Name == $peer) | .Name')
+              if [ -n "$existing_peer" ]; then
+                  echo "::notice::WireGuard peer '$peer' already exists; its private key cannot be recovered. Use a different peer name or leave it unset to vend a new config."
+                  exit 0
+              fi
+
+              # Export the config path for artifact upload and cleanup.
+              config_file="$RUNNER_TEMP/${peer:0:15}.conf"
+              echo "config-file=$config_file" >> "$GITHUB_OUTPUT"
+              echo "peer-name=$peer" >> "$GITHUB_OUTPUT"
+        - if: steps.peer.outputs.peer-name != ''
+          uses: ./.github/actions/fly-networking
+          with:
+              operation: configure
+        - if: steps.peer.outputs.peer-name != ''
+          name: Create WireGuard peer
+          shell: bash
+          env:
+              PEER_NAME: ${{ steps.peer.outputs.peer-name }}
+              CONFIG_FILE: ${{ steps.peer.outputs.config-file }}
+          run: |
+              flyctl wireguard create "$FLY_ORG" "$FLY_PRIMARY_REGION" "$PEER_NAME" "$CONFIG_FILE" --network "$FLY_NETWORK"
+              echo "Created peer '$PEER_NAME' in '$FLY_ORG'; download the WireGuard artifact from this run." | tee -a "$GITHUB_STEP_SUMMARY"
+        - if: steps.peer.outputs.config-file != ''
+          uses: actions/upload-artifact@v7
+          with:
+              name: wireguard-${{ steps.peer.outputs.peer-name }}
+              path: ${{ steps.peer.outputs.config-file }}
+              if-no-files-found: error
+              retention-days: 1
+        - if: always() && steps.peer.outputs.config-file != ''
+          name: Remove temporary config
+          shell: bash
+          env:
+              CONFIG_FILE: ${{ steps.peer.outputs.config-file }}
+          run: rm -f "$CONFIG_FILE"
